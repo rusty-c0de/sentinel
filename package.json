@@ -1,0 +1,25 @@
+{
+  "name": "sentinel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build && wrangler dev",
+    "deploy": "vite build && wrangler deploy",
+    "test": "node verify.mjs",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote"
+  },
+  "dependencies": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "vite": "8.0.13",
+    "wrangler": "4.92.0"
+  }
+}
