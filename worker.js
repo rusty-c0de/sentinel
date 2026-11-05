@@ -375,6 +375,16 @@ function siteFields(data) {
 }
 var severities = ["low", "medium", "high", "critical"];
 var statuses = ["reported", "investigating", "resolved"];
+var militaryBases = [
+  ["2f100001-0000-4000-8000-000000000001", "Fort Bragg", "North Carolina", 35.139, -79.006],
+  ["2f100001-0000-4000-8000-000000000002", "Fort Campbell", "Kentucky / Tennessee", 36.668, -87.477],
+  ["2f100001-0000-4000-8000-000000000003", "Naval Station Norfolk", "Virginia", 36.946, -76.327],
+  ["2f100001-0000-4000-8000-000000000004", "Naval Base San Diego", "California", 32.684, -117.119],
+  ["2f100001-0000-4000-8000-000000000005", "Joint Base San Antonio", "Texas", 29.383, -98.617],
+  ["2f100001-0000-4000-8000-000000000006", "Wright-Patterson AFB", "Ohio", 39.826, -84.048],
+  ["2f100001-0000-4000-8000-000000000007", "Patrick Space Force Base", "Florida", 28.234, -80.610],
+  ["2f100001-0000-4000-8000-000000000008", "Schriever Space Force Base", "Colorado", 38.802, -104.526]
+];
 async function handle(r, e) {
   const path = new URL(r.url).pathname, method = r.method;
   if (!e.DB || !e.SITE_PASSWORD) throw new HttpError(503, "Workspace setup is incomplete. Please contact the site owner.");
@@ -402,8 +412,9 @@ async function handle(r, e) {
     return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(r, "", 0) });
   }
   if (path === "/api/workspace" && method === "GET") {
+    await e.DB.batch(militaryBases.map(([id, name, region, lat, lng]) => e.DB.prepare("INSERT OR IGNORE INTO installations (id,name,region,lat,lng,contact_name,contact_email,contact_phone,created_at,updated_at) VALUES (?,?,?,?,?,'','','',?,?)").bind(id, name, region, lat, lng, "2026-11-04T00:00:00.000Z", "2026-11-04T00:00:00.000Z")));
     const [s, i, o, l, c, links] = await e.DB.batch([
-      e.DB.prepare("SELECT id,name,region,lat,lng,contact_name AS contactName,contact_email AS contactEmail,contact_phone AS contactPhone,created_at AS createdAt,updated_at AS updatedAt FROM installations ORDER BY name COLLATE NOCASE"),
+      e.DB.prepare(`SELECT id,name,region,lat,lng,contact_name AS contactName,contact_email AS contactEmail,contact_phone AS contactPhone,created_at AS createdAt,updated_at AS updatedAt FROM installations WHERE id IN (${militaryBases.map(() => "?").join(",")}) ORDER BY name COLLATE NOCASE`).bind(...militaryBases.map((b) => b[0])),
       e.DB.prepare("SELECT id,site_id AS siteId,title,summary,severity,status,log_key IS NOT NULL AS hasLog,file_name AS fileName,created_at AS createdAt,updated_at AS updatedAt FROM incidents ORDER BY created_at DESC"),
       e.DB.prepare("SELECT id,incident_id AS incidentId,site_id AS siteId,source_ip AS sourceIp,target_ip AS targetIp,target_port AS targetPort,protocol,username,event_type AS eventType,outcome,occurred_at AS occurredAt,source_label AS sourceLabel,source_lat AS sourceLat,source_lng AS sourceLng,precision,line_number AS lineNumber,created_at AS createdAt FROM observations ORDER BY created_at DESC,rowid DESC LIMIT 5000"),
       e.DB.prepare("SELECT source_ip AS sourceIp,label,lat,lng,precision,updated_at AS updatedAt FROM source_locations"),
@@ -441,18 +452,10 @@ async function handle(r, e) {
   }
   if (path === "/api/reports" && method === "POST") {
     const d = await body(r), now = (/* @__PURE__ */ new Date()).toISOString();
-    let siteId = field(d.siteId, 80), newSite = null;
-    if (siteId) {
-      if (!await e.DB.prepare("SELECT id FROM installations WHERE id=?").bind(siteId).first()) throw new HttpError(404, "Installation no longer exists. Refresh and try again.");
-    } else {
-      newSite = siteFields(d);
-      siteId = crypto.randomUUID();
-    }
+    const siteId = field(d.siteId, 80, true);
+    if (!militaryBases.some((b) => b[0] === siteId)) throw new HttpError(400, "Choose one of the established U.S. military bases.");
+    if (!await e.DB.prepare("SELECT id FROM installations WHERE id=?").bind(siteId).first()) throw new HttpError(404, "Installation directory is unavailable. Refresh and try again.");
     const stmts = [];
-    if (newSite) {
-      const s = newSite;
-      stmts.push(e.DB.prepare("INSERT INTO installations (id,name,region,lat,lng,contact_name,contact_email,contact_phone,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(siteId, s.name, s.region, s.lat, s.lng, s.contactName, s.contactEmail, s.contactPhone, now, now));
-    }
     let incidentId = null, logKey = null;
     if (d.includeIncident) {
       const title = field(d.title, 180, true), summary = field(d.summary, 6e3, true), severity = field(d.severity, 20, true), status = field(d.status, 30, true), rawLog = field(d.rawLog, 5e5), fileName = field(d.fileName, 200) || "pasted-log.txt";
@@ -486,8 +489,8 @@ async function handle(r, e) {
         event.sourceLabel = field(d.sourceLabel, 120) || country?.name || "Analyst-supplied location";
         event.precision = hasSourceCoords ? "analyst" : "analyst-country";
       }
-      const directory = await e.DB.prepare("SELECT id,name FROM installations").all();
-      const mainName = newSite?.name ?? directory.results.find((x) => x.id === siteId)?.name ?? "";
+      const directory = { results: militaryBases.map(([id, name]) => ({ id, name })) };
+      const mainName = directory.results.find((x) => x.id === siteId)?.name ?? "";
       const mappedEvents = events.map((event) => {
         let targetId = siteId;
         const hint = event.targetHint;
@@ -514,9 +517,8 @@ async function handle(r, e) {
         const keys = ["id", "incidentId", "siteId", "sourceIp", "targetIp", "targetPort", "protocol", "username", "eventType", "outcome", "occurredAt", "sourceLabel", "sourceLat", "sourceLng", "precision", "lineNumber", "createdAt"];
         stmts.push(e.DB.prepare(`INSERT INTO observations (${columns.join(",")}) SELECT ${keys.map((k) => `json_extract(value,'$.${k}')`).join(",")} FROM json_each(?)`).bind(JSON.stringify(rows)));
       }
-      if (!newSite) stmts.push(e.DB.prepare("UPDATE installations SET updated_at=? WHERE id=?").bind(now, siteId));
     }
-    if (!stmts.length) throw new HttpError(400, "Add an incident or create a new installation.");
+    if (!d.includeIncident) throw new HttpError(400, "Incident details are required.");
     try {
       await e.DB.batch(stmts);
     } catch (err) {
@@ -527,18 +529,7 @@ async function handle(r, e) {
     return json({ siteId, incidentId }, 201);
   }
   const siteMatch = path.match(/^\/api\/sites\/([a-f0-9-]+)$/);
-  if (siteMatch && method === "PATCH") {
-    const d = siteFields(await body(r));
-    const result = await e.DB.prepare("UPDATE installations SET name=?,region=?,lat=?,lng=?,contact_name=?,contact_email=?,contact_phone=?,updated_at=? WHERE id=?").bind(d.name, d.region, d.lat, d.lng, d.contactName, d.contactEmail, d.contactPhone, (/* @__PURE__ */ new Date()).toISOString(), siteMatch[1]).run();
-    if (!result.meta.changes) throw new HttpError(404, "Installation not found.");
-    return json({ ok: true });
-  }
-  if (siteMatch && method === "DELETE") {
-    const logs = await e.DB.prepare("SELECT log_key FROM incidents WHERE site_id=? AND log_key IS NOT NULL").bind(siteMatch[1]).all();
-    await e.DB.batch([e.DB.prepare("DELETE FROM incidents WHERE site_id=?").bind(siteMatch[1]), e.DB.prepare("DELETE FROM installations WHERE id=?").bind(siteMatch[1])]);
-    if (logs.results.length) await e.BUCKET?.delete(logs.results.map((i) => i.log_key));
-    return json({ ok: true });
-  }
+  if (siteMatch && (method === "PATCH" || method === "DELETE")) throw new HttpError(405, "The military base directory is fixed.");
   const incidentMatch = path.match(/^\/api\/incidents\/([a-f0-9-]+)$/);
   if (incidentMatch && method === "PATCH") {
     const d = await body(r);
@@ -615,7 +606,9 @@ function parseLog(raw) {
   }
   return values;
 }
-var sampleLog = JSON.stringify({ installation: { name: "Demo Atlantic Station", region: "North Atlantic", latitude: 36.85, longitude: -76.29 }, contact: { name: "Demo Duty Officer", email: "duty@example.invalid" }, title: "DEMO \u2014 repeated authentication failures", severity: "high", status: "reported", summary: "Synthetic training evidence only. Repeated failed logins and a later success from one observed source.", events: Array.from({ length: 7 }, (_, i) => ({ timestamp: `2026-11-04T12:00:${String(i * 6).padStart(2, "0")}Z`, source_ip: "203.0.113.21", source_country: "Netherlands", destination_ip: "10.14.0.10", destination_port: 443, target_installation: "Demo Atlantic Station", event_type: "authentication", outcome: i === 6 ? "success" : "failure", username: "demo-user" })) }, null, 2);
+function sampleLog() {
+  return JSON.stringify({ installation: { name: "Naval Station Norfolk", region: "Virginia", latitude: 36.946, longitude: -76.327 }, contact: { name: "Demo Duty Officer", email: "duty@example.invalid" }, title: "DEMO \u2014 repeated authentication failures", severity: "high", status: "reported", summary: "Synthetic training evidence only. Repeated failed logins and a later success from one observed source.", events: Array.from({ length: 7 }, (_, i) => ({ timestamp: `2026-11-04T12:00:${String(i * 6).padStart(2, "0")}Z`, source_ip: "203.0.113.21", source_country: "Netherlands", destination_ip: "10.14.0.10", destination_port: 443, target_installation: "Naval Station Norfolk", event_type: "authentication", outcome: i === 6 ? "success" : "failure", username: "demo-user" })) }, null, 2);
+}
 
 // ../../sites/sentinel-globe/worker-entry.ts
 var worker_entry_default = { fetch(request, env) {
