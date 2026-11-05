@@ -376,14 +376,21 @@ function siteFields(data) {
 var severities = ["low", "medium", "high", "critical"];
 var statuses = ["reported", "investigating", "resolved"];
 var militaryBases = [
-  ["2f100001-0000-4000-8000-000000000001", "Fort Bragg", "North Carolina", 35.139, -79.006],
-  ["2f100001-0000-4000-8000-000000000002", "Fort Campbell", "Kentucky / Tennessee", 36.668, -87.477],
-  ["2f100001-0000-4000-8000-000000000003", "Naval Station Norfolk", "Virginia", 36.946, -76.327],
-  ["2f100001-0000-4000-8000-000000000004", "Naval Base San Diego", "California", 32.684, -117.119],
-  ["2f100001-0000-4000-8000-000000000005", "Joint Base San Antonio", "Texas", 29.383, -98.617],
-  ["2f100001-0000-4000-8000-000000000006", "Wright-Patterson AFB", "Ohio", 39.826, -84.048],
-  ["2f100001-0000-4000-8000-000000000007", "Patrick Space Force Base", "Florida", 28.234, -80.610],
-  ["2f100001-0000-4000-8000-000000000008", "Schriever Space Force Base", "Colorado", 38.802, -104.526]
+  ["2f100001-0000-4000-8000-000000000001", "Fort Bragg", "North Carolina", 35.139, -79.006, "Maj. Cameron Blake", "cameron.blake@bragg.example.invalid", "+1-910-555-0101"],
+  ["2f100001-0000-4000-8000-000000000002", "Fort Campbell", "Kentucky / Tennessee", 36.668, -87.477, "Capt. Morgan Hayes", "morgan.hayes@campbell.example.invalid", "+1-270-555-0102"],
+  ["2f100001-0000-4000-8000-000000000003", "Naval Station Norfolk", "Virginia", 36.946, -76.327, "Cmdr. Alex Morgan", "alex.morgan@norfolk.example.invalid", "+1-757-555-0103"],
+  ["2f100001-0000-4000-8000-000000000004", "Naval Base San Diego", "California", 32.684, -117.119, "Lt. Cmdr. Jamie Chen", "jamie.chen@sandiego.example.invalid", "+1-619-555-0104"],
+  ["2f100001-0000-4000-8000-000000000005", "Joint Base San Antonio", "Texas", 29.383, -98.617, "Col. Riley Torres", "riley.torres@jbsa.example.invalid", "+1-210-555-0105"],
+  ["2f100001-0000-4000-8000-000000000006", "Wright-Patterson AFB", "Ohio", 39.826, -84.048, "Lt. Col. Taylor Reed", "taylor.reed@wpafb.example.invalid", "+1-937-555-0106"],
+  ["2f100001-0000-4000-8000-000000000007", "Patrick Space Force Base", "Florida", 28.234, -80.610, "Maj. Skyler James", "skyler.james@patrick.example.invalid", "+1-321-555-0107"],
+  ["2f100001-0000-4000-8000-000000000008", "Schriever Space Force Base", "Colorado", 38.802, -104.526, "Capt. Avery Quinn", "avery.quinn@schriever.example.invalid", "+1-719-555-0108"],
+  ["2f100001-0000-4000-8000-000000000009", "Marine Corps Base Camp Pendleton", "California", 33.389, -117.45, "Maj. Jordan Reyes", "jordan.reyes@pendleton.example.invalid", "+1-760-555-0109"],
+  ["2f100001-0000-4000-8000-000000000010", "Marine Corps Base Quantico", "Virginia", 38.522, -77.305, "Capt. Morgan Ellis", "morgan.ellis@quantico.example.invalid", "+1-703-555-0110"],
+  ["2f100001-0000-4000-8000-000000000011", "Camp Humphreys", "South Korea", 36.962, 127.031, "Maj. Min-jun Park", "minjun.park@humphreys.example.invalid", "+82-31-555-0111"],
+  ["2f100001-0000-4000-8000-000000000012", "Kadena Air Base", "Japan", 26.355, 127.768, "Capt. Riley Tanaka", "riley.tanaka@kadena.example.invalid", "+81-98-555-0112"],
+  ["2f100001-0000-4000-8000-000000000013", "Ramstein Air Base", "Germany", 49.44, 7.6, "Maj. Casey Weber", "casey.weber@ramstein.example.invalid", "+49-6371-555-0113"],
+  ["2f100001-0000-4000-8000-000000000014", "Joint Base Pearl Harbor-Hickam", "Hawaii", 21.35, -157.95, "Cmdr. Kai Nakamura", "kai.nakamura@pearlharbor.example.invalid", "+1-808-555-0114"],
+  ["2f100001-0000-4000-8000-000000000015", "Naval Air Station Jacksonville", "Florida", 30.235, -81.68, "Lt. Cmdr. Taylor Brooks", "taylor.brooks@jax.example.invalid", "+1-904-555-0115"]
 ];
 async function handle(r, e) {
   const path = new URL(r.url).pathname, method = r.method;
@@ -407,12 +414,20 @@ async function handle(r, e) {
     return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(r, token, SESSION_SECONDS) });
   }
   if (!await authorized(r, e)) throw new HttpError(401, "Your session has ended. Please unlock the workspace.");
+  if (path === "/api/commander/access" && method === "POST") {
+    if (!e.COMMANDER_PASSWORD) throw new HttpError(503, "Commander access is not configured.");
+    const d = await body(r);
+    const supplied = await digest(typeof d.password === "string" ? d.password : "");
+    const expected = await digest(e.COMMANDER_PASSWORD);
+    if (supplied !== expected) throw new HttpError(401, "That password is incorrect.");
+    return json({ ok: true });
+  }
   if (path === "/api/logout" && method === "POST") {
     await e.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(cookieToken(r) + e.SITE_PASSWORD)).run();
     return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(r, "", 0) });
   }
   if (path === "/api/workspace" && method === "GET") {
-    await e.DB.batch(militaryBases.map(([id, name, region, lat, lng]) => e.DB.prepare("INSERT OR IGNORE INTO installations (id,name,region,lat,lng,contact_name,contact_email,contact_phone,created_at,updated_at) VALUES (?,?,?,?,?,'','','',?,?)").bind(id, name, region, lat, lng, "2026-11-04T00:00:00.000Z", "2026-11-04T00:00:00.000Z")));
+    await e.DB.batch(militaryBases.map(([id, name, region, lat, lng, contactName, contactEmail, contactPhone]) => e.DB.prepare("INSERT INTO installations (id,name,region,lat,lng,contact_name,contact_email,contact_phone,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,region=excluded.region,lat=excluded.lat,lng=excluded.lng,contact_name=excluded.contact_name,contact_email=excluded.contact_email,contact_phone=excluded.contact_phone").bind(id, name, region, lat, lng, contactName ?? "Synthetic Base Contact", contactEmail ?? "contact@base.example.invalid", contactPhone ?? "+1-202-555-0100", "2026-11-04T00:00:00.000Z", "2026-11-04T00:00:00.000Z")));
     const [s, i, o, l, c, links] = await e.DB.batch([
       e.DB.prepare(`SELECT id,name,region,lat,lng,contact_name AS contactName,contact_email AS contactEmail,contact_phone AS contactPhone,created_at AS createdAt,updated_at AS updatedAt FROM installations WHERE id IN (${militaryBases.map(() => "?").join(",")}) ORDER BY name COLLATE NOCASE`).bind(...militaryBases.map((b) => b[0])),
       e.DB.prepare("SELECT id,site_id AS siteId,title,summary,severity,status,log_key IS NOT NULL AS hasLog,file_name AS fileName,created_at AS createdAt,updated_at AS updatedAt FROM incidents ORDER BY created_at DESC"),
